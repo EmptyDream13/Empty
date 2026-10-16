@@ -2013,20 +2013,57 @@ def _desktop_fingerprint_fallback(s, uid, nick, log, need_rich, need_skill):
 
 
 
+def t_compensation(s, log):
+    """按用量管理页面口径查询、领取并回查一次性补偿。"""
+    url = BASE + "/billing/meter/compensation-status"
+
+    def status():
+        response = s.post(url, json={}, timeout=15).json()
+        if response.get("code") != 0 or not isinstance(response.get("data"), dict):
+            raise ValueError("补偿状态接口未返回有效数据")
+        return response["data"]
+
+    try:
+        current = status()
+    except Exception as exc:
+        log("   ⚠️补偿状态查询失败: %s" % type(exc).__name__)
+        return
+    if not current.get("active"):
+        return
+    if current.get("claimed"):
+        log("   🎊补偿积分: 已领取")
+        return
+
+    credit = current.get("credit_num", "?")
+    deadline = current.get("end_time", "")
+    log("   🎊补偿待领取: %s积分%s" % (credit, "（截止%s）" % deadline if deadline else ""))
+    try:
+        result = s.post(BASE + "/billing/meter/claim-compensation",
+                        json={}, timeout=15).json()
+    except Exception as exc:
+        log("   ⚠️补偿领取请求异常: %s" % type(exc).__name__)
+        result = {}
+
+    # 请求可能成功但响应丢失；只以服务端最终状态确认到账。
+    try:
+        if status().get("claimed"):
+            log("   ✅补偿领取成功: +%s积分" % credit)
+            return
+    except Exception as exc:
+        log("   ⚠️补偿领取后状态回查失败: %s" % type(exc).__name__)
+        return
+    log("   ⚠️补偿领取未确认: %s" % str(result.get("msg") or "请稍后重试")[:80])
+
+
 def t_gift_compensation(s, uid, nick, log):
-    """礼包(每号一次) + 补偿领取(活动开启时)"""
+    """礼包(每号一次) + 活动补偿。"""
     try:
         r = s.post(BASE + "/billing/meter/claim-gift", json={}, timeout=15, verify=False).json()
         if r.get("code") == 0:
             log("   🎊新手礼包: +%s积分" % r.get("data", {}).get("credit", "?"))
     except Exception:
         pass
-    try:
-        r = s.post(BASE + "/billing/meter/claim-compensation", json={}, timeout=15, verify=False).json()
-        if r.get("code") == 0:
-            log("   🎊补偿领取: +%s积分" % r.get("data", {}).get("credit", "?"))
-    except Exception:
-        pass
+    t_compensation(s, log)
 
 
 def t_makeup(s, uid, nick, log):
